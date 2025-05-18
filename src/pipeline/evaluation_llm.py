@@ -91,6 +91,3 @@ def validate_all_invoices(extracted_path, ground_truth_path):
 
 if __name__ == "__main__":
     validate_all_invoices(EXTRACTED_PATH, GROUND_TRUTH_PATH)
-
-
-

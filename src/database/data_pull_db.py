@@ -1,4 +1,3 @@
-
 from langchain.schema import Document
 import json
 from pymongo import MongoClient
