@@ -3,7 +3,6 @@ from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 from src.configs.path import GROUND_TRUTH_PATH, EXTRACTED_PATH
 
 
-
 def compute_bleu_score(reference, prediction):
     smoothie = SmoothingFunction().method4
     return sentence_bleu([reference.split()], prediction.split(), smoothing_function=smoothie)
