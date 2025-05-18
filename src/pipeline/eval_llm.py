@@ -1,40 +1,96 @@
-import os
 import json
-from src.utils.load_data import load_extracted_jsonl, load_jsonl
-from src.components.Evaluation_LLM import evaluate_invoice_llm
+from dotenv import load_dotenv
+from openai import OpenAI
+from src.configs.path import GROUND_TRUTH_PATH, EXTRACTED_PATH
 
-GROUND_TRUTH_PATH = "D:\Evaluate-pipeline\src\downloaded_dataset\ground_truth_14052025.jsonl"
-EXTRACTED_PATH = "D:\\Evaluate-pipeline\\src\\downloaded_dataset\\extracted_data.jsonl"
+# Load the .env file
+load_dotenv()
+client = OpenAI()
 
-def llm_main():
-    # Load data
-    gt_data = load_jsonl(GROUND_TRUTH_PATH)
-    ext_data = load_extracted_jsonl(EXTRACTED_PATH)
 
+def load_jsonl(filepath):
+    with open(filepath, "r", encoding="utf-8") as f:
+        return [json.loads(line) for line in f]
+
+
+def build_validation_prompt(extracted, ground_truth, seen_invoices):
+    invoice_no = extracted.get("header", {}).get("invoice_no", "")
+    is_duplicate = invoice_no in seen_invoices
+    if invoice_no:
+        seen_invoices.add(invoice_no)
+
+    prompt = f"""
+You are a validation assistant. Compare the extracted invoice data with the ground truth.
+Check the following strictly:
+⚬ Missing fields (in header, items, or summary)
+⚬ Errors in totals or date
+⚬ Duplicate invoice numbers
+
+Respond with one of:
+- Validated
+- Needs Correction\n⚬ [list each issue on a separate line]
+
+Only respond in that format. No extra explanation.
+
+Extracted:
+{json.dumps(extracted, indent=2)}
+
+Ground Truth:
+{json.dumps(ground_truth, indent=2)}
+
+Duplicate Invoice: {"Yes" if is_duplicate else "No"}
+"""
+    return prompt
+
+
+def validate_all_invoices(extracted_path, ground_truth_path):
+    seen_invoices = set()
     results = []
 
-    # Process all images
-    for image_id in sorted(gt_data):
-        gt = gt_data.get(image_id, {})
-        extracted = ext_data.get(image_id, {})
+    extracted_data = load_jsonl(extracted_path)
+    ground_truth_data = load_jsonl(ground_truth_path)
+    gt_lookup = {d["image"]: d["ground_truth"]["gt_parse"] for d in ground_truth_data}
 
-        if not extracted:
+    for entry in extracted_data:
+        filename = entry.get("image")
+        extracted = entry.get("extracted_parse", {})
+
+        if filename not in gt_lookup:
+            print(f"⚠️ Skipping: Ground truth missing for {filename}")
             continue
 
-        # evaluate_invoice_llm returns: (image_id, result_dict)
-        image_id, result_dict = evaluate_invoice_llm(gt, extracted, image_id)
-        results.append((image_id, result_dict))
+        ground_truth = gt_lookup[filename]
+        prompt = build_validation_prompt(extracted, ground_truth, seen_invoices)
 
-    # Print all results
-    for image_id, result_dict in results:
-        print(f"\nImage: {image_id}")
-        print(f"Status: {result_dict.get('status', 'N/A')}")
-        print(f"Flags: {result_dict.get('flags', [])}")
-        print(f"Notes: {result_dict.get('notes', '')}")
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a strict invoice validation assistant.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+            )
+            result = response.choices[0].message.content.strip()
+            print(f"\n🧾 {filename}:\n{result}")
+            results.append({"file": filename, "result": result})
+        except Exception as e:
+            print(f"❌ Error validating {filename}: {e}")
+            results.append({"file": filename, "result": "Error"})
+
+    output_file = "invoice_validation_results.jsonl"
+    with open(output_file, "w", encoding="utf-8") as f:
+        for r in results:
+            f.write(json.dumps(r) + "\n")
+
+    print(f"\n✅ Validation complete. Results saved to {output_file}")
+
 
 if __name__ == "__main__":
-    llm_main()
-
+    validate_all_invoices(EXTRACTED_PATH, GROUND_TRUTH_PATH)
 
 
 
